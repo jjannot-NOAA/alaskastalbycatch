@@ -1,0 +1,423 @@
+---
+title: "Albatross bycatch modeling for Alaskan Federal fisheries"
+author: "Jason E. Jannot, Eric J. Ward, Tom Good, Joe Krieger, Jason Gasper"
+date: "`r format(Sys.Date(), '%Y-%B-%d')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    fig_cap: true
+  pdf_document: default
+  word_document: default
+---
+# Set-up
+a LaTeX command that defines \mx to be the equivalent of \mathbf
+$$\newcommand{\mx}[1]{\mathbf{#1}}$$
+
+## Load packages 
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+# set to final year in data set
+  data.year <- "2018"
+
+# libraries
+  library(ggplot2) 
+  library(dplyr)  
+  library(knitr)
+  library(tools)
+  library(stringr)
+  library(kableExtra)
+  library(devtools) # for using e.g., install_github(...)
+  library(tidyr)
+  library(janitor)
+  library(lubridate)
+  library(tibble)
+  library(purrr)
+#installs EW's bycatch package from github if not already installed
+  if(!require(bycatch)){
+  devtools::install_github("ericward-noaa/bycatch")
+    }else{
+  library(bycatch)
+    }
+
+qdf <- function(.){data.frame(., stringsAsFactors = FALSE)}
+
+```
+## Set drive & data year, load data
+Change the `data.year` object to the most recent year in the data set. Change the `infiledrive` object to the path where the data are located.
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+# set to final year in data set
+  data.year <- "2018"
+# path to data
+  infiledrive <- "~/observer/Input/MMSBT/2021/Seabirds/Data/alaskadata/"
+
+# catcher-vessel data
+akcv <- read_csv( file = paste0(infiledrive, "CATCHER_VESSELS_ALBATROSS.csv"))%>%
+        clean_names()%>%
+        qdf()
+
+# catcher-processor data
+akcp <- read_csv( file = paste0(infiledrive, "CATCHERPROCESSOR_VESSELS_ALBATROSS.csv"))%>%
+        clean_names()%>%
+        qdf()
+
+```
+## Munge Data
+```{r, warning=FALSE, message=FALSE, echo=TRUE}
+akcv <- akcv%>%
+        dplyr::select(one_of(names(.)[names(.)%in%names(akcp)]))%>%
+        mutate(vess_type = "CV")%>%
+        qdf()
+
+akcp <- akcp%>%
+        mutate(vess_type = "CP")%>%
+        dplyr::select(one_of(names(.)[names(.)%in%names(akcv)]))%>%
+        qdf()
+
+# ak <- rbind(akcv,akcp)
+dim(akcv)
+dim(akcp)
+# dim(ak)
+```
+# Models
+## Bayesian Modeling Approach
+We use Bayesian models to estimate mean and variance of total bycatch. These methods have been used with other rare bycatch species, including cetaceans, delphinids, pinnipeds, sea turtles, and sharks (as cited in Martin et al. 2015). To do this, we model bycatch rate and inferr annual expected mortality from that rate given a specified level of effort.</br>
+In the simplest case, we can use a simple Poisson process model, where the total number of bycatch events are assumed to follow a Poisson distribution (see model M1 in Martin et al. 2015):</br>
+$$n_{takes,y}\sim Poisson(\lambda_y = \theta * E_y)$$
+where:
+$\begin{aligned}
+\mx{E_{y}} = \text{effort in year } y\\
+\mx{\theta} = \text{estimated bycatch rate}\\
+\mx{\lambda_{y}} = \text{mean expected bycatch in year } y\\
+\mx{n_{takes,y}} = \text{observed number of bycatch (i.e., take) events in year }y\\
+\end{aligned}$
+The estimated bycatch rate, \mx{\theta} is assumed to be constant in the base case.  (If desired, a time-varying rate can be applied and tested for validity). A time series of the mean bycatch can be generated for a given species with a given effort metric. However, \mx{\theta * E_{y}} includes uncertainty because \mx{\theta} is estimated.  All uncertainty in the time series arises due to fluctuating effort over time -- percent observer coverage only affects the expansion to unobserved portion of the fleet. We can use Bayesian models (Martin et al. 2015) to estimate mean and 95% CIs of \mx{\theta} and \mx{\theta * E_{y}}.\\
+The simple Poisson base case could be constraining because it assumes that the variance and mean are equal.  The Poisson distribution is a special case of the negative binomial distribution.  To add flexibility to our modeling, we can generalize to use the negative binomial distribution in cases where we might suspect overdispersion such that variance is not equal to the mean.  While the simple Poisson base case above has only a single parameter, \mx{\lambda}, the negative binomial case adds a second paramter, \mx{\kappa} to the model to account for overdispersion (Ver Hoef & Boveng 2007):</br>
+$$n_{takes,y}\sim NegBin2(\lambda_y,\kappa)$$
+The parameter \mx{\kappa} can be used to adjust the variance, independent of the mean, and, as shown in the example below, when the Poisson and negative binomial are applied to the same data set, the means are nearly identical but the variances are quite different.
+
+All of these models assume that bycatch is:</br>
+  a. from a binomial distribution where p (but not N) is known.</br>
+  b. predicted by metrics of fishing effort.</br>
+  c. either constant or time-varying bycatch rates, depending on the model.</br>
+
+## Bycatch Example
+Species: Black-footed Albatross (BFAL)</br>
+Fishery: AK Catcher vessels (CV)</br>
+Area: Gulf of Alaska (GOA)</br>
+
+## Poisson distribution with constant bycatch, no covariates
+Start with the model from [Martin et al. (2015)](http://onlinelibrary.wiley.com/doi/10.1890/14-0059.1/abstract). This model wasn't used in the paper, but models bycatch rate as constant using a Poisson distribution and does not use covariates. As a starting point for the example, we model the Alaska catcher vessels black-footed albatross (BFAL) bycatch in the GOA, becaues this fishery has a low coverage rate with (relatively) high bycatch.  Thus makes for a good example case.    
+The `fit_bycatch()` function fits the model to the observed data using the observed effort. 
+```{r, warning=FALSE, message=FALSE, include = FALSE, echo=c(1,3)}
+# for reproducibility
+set.seed(98112)
+#subset to BFAL in the GOA
+d <- akcv%>%
+      filter(fmp == "GOA",
+             name == "Black-footed Albatross")%>%
+      qdf()
+
+fit = fit_bycatch(count_birds ~ 1, data = d, time="year", effort="obs_hooks", family="poisson", time_varying = FALSE)
+
+```
+
+If divergent transition warnings or other issues indicating lack of convergence are a problem, we can try changing some of the control arguments, e.g.
+
+```{r, eval=FALSE}
+#Not Run
+fit = fit_bycatch(count_birds ~ 1, data = d, time="year", effort="obs_hooks", family="poisson",  time_varying = FALSE, control=list(adapt_delta=0.99,max_treedepth=20))
+```
+
+We can also increase the iterations and number of chains from the defaults (1000 and 3),
+
+```{r,  eval=FALSE}
+#Not Run
+fit = fit_bycatch(count_birds ~ 1, data = d, time="year", effort="obs_hooks", family="poisson",
+  time_varying = FALSE, iter=3000, chains=4)
+```
+
+### Plot - Poisson, constant bycatch rate, no covariates
+`plot_fitted()` function plots the fitted values in a time series.
+```{r poisconsnopts, fig.pos="placeHere", fig.cap = "Figure 1. Estimated bycatch for observed vessels (not expanded by observer coverage), but including observed takes and effort."}
+plot_fitted(fit, xlab="Year", ylab = "Bycatch estimate (95% CI)") +
+      scale_x_continuous(breaks = seq(min(d$year), data.year, 1))  +
+      labs( title = "Black-footed Albatross\nPoisson, constant rate",
+            subtitle = "effort = no. hooks") +
+      theme( panel.background = element_blank(),
+             panel.border     = element_blank(),
+             plot.background  = element_blank(),
+             plot.title       = element_text(hjust = 0.5, face = "bold", size = rel(1.5)),
+             plot.subtitle    = element_text(hjust = 0.5, face = "bold", size = rel(1.25)),
+             panel.grid       = element_blank(),
+             axis.text        = element_text(size = 14, face = "bold"),
+             axis.title       = element_text(size = 16, face = "bold"),
+             axis.line        = element_line(colour = "black", size = 1),
+             legend.position  = "none")
+```
+
+We can include points using `include_points = TRUE` argument, 
+```{r poisconspts, fig.pos="placeHere", fig.cap = "Figure 2. Same as Figure 1, but with points."}
+plot_fitted(fit, xlab="Year", ylab = "Bycatch estimate (95% CI)", include_points = TRUE) +
+      scale_x_continuous(breaks = seq(min(d$year), data.year, 1))  +
+      labs( title = "Black-footed Albatross\nPoisson, constant rate",
+            subtitle = "effort = no. hooks") +
+      theme( panel.background = element_blank(),
+             panel.border     = element_blank(),
+             plot.background  = element_blank(),
+             plot.title       = element_text(hjust = 0.5, face = "bold", size = rel(1.5)),
+             plot.subtitle    = element_text(hjust = 0.5, face = "bold", size = rel(1.25)),
+             panel.grid       = element_blank(),
+             axis.text        = element_text(size = 14, face = "bold"),
+             axis.title       = element_text(size = 16, face = "bold"),
+             axis.line        = element_line(colour = "black", size = 1),
+             legend.position  = "none")
+```
+  
+### Extracting model selection information (LOOIC) - Poisson, constant rate 
+  
+The `loo` package in R provides a nice interface for extracting leave one out information criterion (LOOIC) from `stanfit` objects. Like AIC, lower is better. Values of LOOIC can be used to compare models with the same response but different structure (covariates or not, time-varying bycatch or not, etc). Additional information on LOOIC can be found at [mc-stan.org](http://mc-stan.org/rstanarm/reference/loo.stanreg.html), [Vehtari et al. 2017](https://link.springer.com/article/10.1007/s11222-016-9696-4), or the vignette for the [loo package](https://cran.r-project.org/web/packages/loo/vignettes/loo2-example.html).
+
+```{r}
+bfal_loo1 <- loo::loo(fit$fitted_model)$estimates
+bfal_loo1
+```
+The LOO importance sampling threw a warning suggesting some Pareto-K values were too high ( ~k > 0.7, see Vehtari et al. 2017 a & b). We can check the k values,
+```{r}
+loo::pareto_k_table(loo::loo(fit$fitted_model))
+```
+Looks like about 33% of our k values were > 0.7 indicating some problems with convergence.  It could mean that the means and variances are too large or infinite and therefore unstable.  This model might not be suitable.  However, we will continue on with this model for example purposes.
+
+## Expanding bycatch estimates to the fleet level - Poisson, constant rate
+  
+Continuing with our example, the observer coverage for the AK catcher-vessel dataset is less than 100%. Therefore, our estimates need to be expanded to the fleet to account for bycatch by the unobserved vessels. There are some important `control` arguments here that are left at defaults, but might need adjustment.    
+
+The `expand()` function of the `bycatch` package does the bycatch extrapolations to the entire fleet.  This function runs a series of simulations, which can take a few minutes (at least at the NWFSC on our dedicated analytical server. YMMV.) Note there is an expand function in `tidyr` as well - be sure to use the correct function (e.g., `bycatch::expand`). 
+
+```{r}
+expanded = bycatch::expand(fit, coverage = d$percent_obs_landing)
+```
+The warning indicates we need to increase the `maxX` argument to 49100. We can do this with the `control` options of the `expand()` function:
+```{r}
+expanded = bycatch::expand(fit, coverage = d$percent_obs_landing,
+                  control = list(sigfig_multiplier = 100, mcmc_samples = 1000, maxX = 49100))
+```
+
+And we can then plot these estimates using the `bycatch::plot_expand()` function. Like the previous function we can specify whether to include the raw points or not.
+  
+```{r poisconstexpd, fig.pos="placeHere", fig.cap = "Figure 3. Estimated fleet-wide bycatch (observed & unobserved vessels) of black-footed albatross caught by catcher vessels in the Gulf of Alaska. The Poisson distribution incorporates data on takes, effort as the number of observed hooks, and observer coverage as a percentage of observed landings. Bycatch rate is assumed to be constant.  Dots represent observed bycatch events."}
+plot_expanded(fitted_model = fit, 
+              expanded_estimates = expanded, 
+              xlab="Year", ylab = "Fleet-wide bycatch estimate\n(95% CI)", include_points = TRUE) +
+      scale_x_continuous(breaks = seq(min(d$year), data.year, 1))  +
+      labs( title = "Black-footed Albatross\nPoisson, constant rate",
+            subtitle = "effort = no. hooks") +
+      theme( panel.background = element_blank(),
+             panel.border     = element_blank(),
+             plot.background  = element_blank(),
+             plot.title       = element_text(hjust = 0.5, face = "bold", size = rel(1.5)),
+             plot.subtitle    = element_text(hjust = 0.5, face = "bold", size = rel(1.25)),
+             panel.grid       = element_blank(),
+             axis.text        = element_text(size = 14, face = "bold"),
+             axis.title       = element_text(size = 16, face = "bold"),
+             axis.line        = element_line(colour = "black", size = 1),
+             legend.position  = "none")
+
+```
+
+### Table of expanded bycatch estimates - Poisson, constant rate
+
+We can also summarize the expanded estimates in table form:
+
+```{r, results = 'asis', echo = FALSE}
+df_Poisson = data.frame("time" = d[,"year"], 
+                        "mean" = apply(expanded, 2, mean),
+                        "median" = apply(expanded, 2, quantile, 0.5),
+                        "lower95" = apply(expanded, 2, quantile, 0.025),
+                        "upper95" = apply(expanded, 2, quantile, 0.975),
+                        "model"  = rep("Poisson", nrow(d)),
+                        "bycatch rate" = rep("constant", nrow(d)))%>%
+              mutate_if(is.numeric, round)%>%
+              qdf()
+
+write.csv(df_Poisson, file = paste0(infiledrive, "BFAL_GOA_CV_estimated_bycatch_Poisson_constant_observed_hooks.csv"), row.names = FALSE)
+
+knitr::kable(df_Poisson,
+      caption  = paste0("Fleet-wide bycatch estimates of black-footed albatross in the catcher vessel fleet fishing in the Gulf of Alaska for ", min(d$year), "-", data.year, ". Estimates are from a Poisson distribution, assuming a constant bycatch rate, with effort measured as the observed number of hooks, and the expansion based on the proportion of observed landings."))
+
+```
+
+\break 
+
+## Negative binomial distribution, constant bycatch rate, no covariates
+
+We can switch from the Poisson distribution to Negative Binomial distribution using the `family` argument. In theory, a negative binomial distribution might provide more realistic error estimates.
+
+```{r, results="hide", message=FALSE, warning=FALSE}
+fit_nb = fit_bycatch(count_birds ~ 1, data = d, time="year", effort="obs_hooks", family="nbinom2",
+  time_varying = FALSE)
+```
+
+The degree of overdispersion here is stored in the variable `nb2_phi`, which we can get with
+
+```{r}
+phi_poisson = rstan::extract(fit_nb$fitted_model)$nb2_phi
+mean(phi_poisson)
+```
+
+When expanding to fleet-wide estimates from the negative binomial distribution, a warning was issued to increase the `maxX` value to 490000. 
+
+```{r negbinconst, fig.pos="placeHere", fig.cap = "Figure 4. Estimated fleet-wide bycatch (observed & unobserved vessels) of black-footed albatross caught by catcher vessels in the Gulf of Alaska. Both the  Poisson and the negative binomial distribution incorporate data on takes, effort as the number of observed hooks, and observer coverage as a percentage of observed landings. Bycatch rate is assumed to be constant.  Dots represent observed bycatch events.", echo = 1}
+
+expanded_nb = bycatch::expand(fit_nb, coverage = d$percent_obs_landing,
+                     control = list(sigfig_multiplier = 100, mcmc_samples = 1000, maxX = 490000))
+
+df_negbinom = data.frame("time" = d[,"year"], 
+              "mean" = apply(expanded_nb, 2, mean),
+              "median" = apply(expanded_nb, 2, quantile, 0.5),
+              "lower95" = apply(expanded_nb, 2, quantile, 0.025),
+              "upper95" = apply(expanded_nb, 2, quantile, 0.975),
+              "model"  = rep("negbinom", nrow(d)),
+                        "bycatch rate" = rep("constant", nrow(d)))%>%
+              mutate_if(is.numeric, round)%>%
+              qdf()
+
+write.csv(df_negbinom, paste0(infiledrive,                        "BFAL_GOA_CV_estimated_bycatch_negbinom_constant_observed_hooks.csv"),
+          row.names = FALSE)
+
+knitr::kable(df_negbinom,
+      caption  = paste0("Fleet-wide bycatch estimates (observed & unobserved vessels) of black-footed albatross in the catcher vessel fleet fishing in the Gulf of Alaska for ", min(d$year), "-", data.year, ". Estimates are from a negative binomial distribution, assuming a constant bycatch rate, with effort measured as the observed number of hooks, and the expansion based on the proportion of observed landings."))
+
+df <- rbind(df_Poisson, df_negbinom)
+
+ggplot(df, aes(df$time, mean)) +
+        geom_ribbon(aes(ymin = lower95, ymax = upper95, fill = model),
+                    alpha = 0.3) + 
+        geom_line(aes(color = model)) +
+        scale_x_continuous(breaks = seq(min(d$year), data.year, 1))  +
+        labs( x = "Year", 
+             y = "Fleet-wide bycatch estimate\n(95% CI)",
+            title = "Black-footed Albatross\nPoisson & Neg. Binomial\n constant bycatch rate",
+            subtitle = "effort = no. hooks") +
+      theme( panel.background = element_blank(),
+             panel.border     = element_blank(),
+             plot.background  = element_blank(),
+             plot.title       = element_text(hjust = 0.5, face = "bold", size = rel(1.5)),
+             plot.subtitle    = element_text(hjust = 0.5, face = "bold", size = rel(1.25)),
+             panel.grid       = element_blank(),
+             axis.text        = element_text(size = 14, face = "bold"),
+             axis.title       = element_text(size = 16, face = "bold"),
+             axis.line        = element_line(colour = "black", size = 1),
+             legend.position  = "right")
+
+```
+\break
+
+## Fit model with time-varying effects - Poisson, time-varying bycatch
+
+To incorporate potential autocorrelation, we can fit a model with time-varying random effects. This is equivalent to a dynamic linear model with time varying intercept in a Poisson GLM.    
+
+Here we use the BFAL data from the GOA with a Poisson distribution to model time-varying bycatch rates. Note we needed to increase the `maxX` to 75834 for this example.
+
+```{r, results="hide", message=FALSE, warning=FALSE}
+fit_Ptv = fit_bycatch(count_birds ~ 1, data = d, time="year", effort="obs_hooks", family="poisson", time_varying = TRUE)
+```
+
+```{r poistimevary, fig.pos="placeHere", fig.cap = "Figure 5. Estimated fleet-wide bycatch (observed & unobserved vessels) of black-footed albatross caught by catcher vessels in the Gulf of Alaska. The model assumes a Poisson distribution when incorporating data on takes, effort as the number of observed hooks, and observer coverage as a percentage of observed landings. Bycatch rate varies among years."}
+
+expanded_tv = bycatch::expand(fit_Ptv, coverage = d$percent_obs_landing,
+                     control = list(sigfig_multiplier = 100, mcmc_samples = 1000, maxX = 75834))
+
+plot_expanded(fitted_model = fit_Ptv,
+              expanded_estimates = expanded_tv,
+              xlab="Year", ylab = "Fleet-wide bycatch estimate\n(95% CI)", include_points = TRUE) +
+      scale_x_continuous(breaks = seq(min(d$year), data.year, 1))  +
+      labs( title = "Black-footed Albatross\nPoisson, time-varying rate",
+            subtitle = "effort = no. hooks") +
+      theme( panel.background = element_blank(),
+             panel.border     = element_blank(),
+             plot.background  = element_blank(),
+             plot.title       = element_text(hjust = 0.5, face = "bold", size = rel(1.5)),
+             plot.subtitle    = element_text(hjust = 0.5, face = "bold", size = rel(1.25)),
+             panel.grid       = element_blank(),
+             axis.text        = element_text(size = 14, face = "bold"),
+             axis.title       = element_text(size = 16, face = "bold"),
+             axis.line        = element_line(colour = "black", size = 1),
+             legend.position  = "none")
+```
+
+\break 
+
+## Example with covariates
+
+Following [Martin et al. 2015](http://onlinelibrary.wiley.com/doi/10.1890/14-0059.1/abstract) we can include fixed or continuous covariates. 
+
+For example, we could include a julian day or a break point representing a regulatory change in the data. We could model the first variable as a continuous predictor and the second as a factor.    
+
+For the BFAL CV case, we will look at the difference between GOA and BAI.
+
+```{r}
+d <- akcv%>%
+      filter(name == "Black-footed Albatross")%>%
+      qdf()
+
+```
+
+Using the formula interface makes it easy to include covariates, but in this case, we need to increase the iterations to make sure we have enough effective sample sizes (to see original warnings, remove the 'iter' argument from the function below and re-run).
+
+```{r message=FALSE, warning=FALSE, results="hide"}
+fit_Pcov = fit_bycatch(count_birds ~ fmp,  # which is same as ~ 1 + fmp and fmp + offset(year)
+                       data = d, time = "year", effort = "obs_hooks",
+                       family="poisson", time_varying = FALSE,
+                       iter = 3000)
+```
+
+We can get the covariate effects out with the following call:
+```{r, message=FALSE, warning=FALSE, results="hide"}
+betas = rstan::extract(fit_Pcov$fitted_model)$beta
+betas <- betas%>%
+         qdf()%>%
+         dplyr::rename(intercept = X1, fmp = X2)%>%
+         qdf()
+betas <- pivot_longer(betas, cols = 1:2, names_to = "parameter", values_to = "estimate" )%>%
+         qdf()
+         
+```
+
+Note that 'betas' has 2 columns. These correspond to (1) the intercept and
+(2) the `fmp` predictor. If we didn't 
+include the covariates, we'd still estimate beta[1] as the intercept.  Also note - these are *distributions* of the parameters.
+```{r poisconstcovars, fig.pos="placeHere", fig.cap = "Figure 6. Distribution of the intercept and the FMP covariate from the model estimating fleet-wide bycatch (observed & unobserved vessels) of black-footed albatross caught by catcher vessels in the Gulf of Alaska. The model assumes a Poisson distribution when incorporating data on takes, effort as the number of observed hooks, and observer coverage as a percentage of observed landings. Bycatch rate is constant.", echo = FALSE}
+
+ggplot(data = betas)+
+              geom_density( aes(estimate, color = parameter, fill = parameter), alpha = 0.2)+
+              labs( title = "FMP Covariate",
+                        subtitle = "Black-footed Albatross\nPoisson, constant rate\neffort = no. hooks") +
+              theme( panel.background = element_blank(),
+                     panel.border     = element_blank(),
+                     plot.background  = element_blank(),
+                     plot.title       = element_text(hjust = 0.5, face = "bold", size = rel(1.5)),
+                     plot.subtitle    = element_text(hjust = 0.5, face = "bold", size = rel(1.25)),
+                     panel.grid       = element_blank(),
+                     axis.text        = element_text(size = 14, face = "bold"),
+                     axis.title       = element_text(size = 16, face = "bold"),
+                     axis.line        = element_line(colour = "black", size = 1),
+                     legend.position  = "right")
+
+```
+
+\break 
+
+
+# References
+Good, T. P., E. Ward, J. Jannot, R. Shama, and J. McVeigh. 2019. [Observed and Estimated Bycatch of Short-tailed Albatross in U.S. West Coast Groundfish Fisheries 2002-2017. National Marine Fisheries Service, NWFSC, 2725 Montlake Blvd E., Seattle, WA 98112.](https://www.pcouncil.org/documents/2019/06/agenda-item-i-4-a-nmfs-report-6-observed-and-estimated-bycatch-of-short-tailed-albatross-in-u-s-west-coast-groundfish-fisheries-2016-2017-electronic-only.pdf/)
+
+[Martin, S.L., S.M. Stohs, and J.E. Moore. 2015.](#martin) [Bayesian inference and assessment for rare‐event bycatch in marine fisheries: a drift gillnet fishery case study. Ecological Applications, 25(2):416-429.](http://onlinelibrary.wiley.com/doi/10.1890/14-0059.1/abstract)
+
+Vehtari, A., Gelman, A., and Gabry, J. (2017a). [Practical Bayesian model evaluation using leave-one-out cross-validation and WAIC. Statistics and Computing 27(5), 1413-1432.](doi:10.1007/s11222-016-9696-4) (journal version, preprint
+     arXiv:1507.04544).
+
+Vehtari, A., Gelman, A., and Gabry, J. (2017b). [Pareto smoothed importance sampling.](https://arxiv.org/abs/1507.02646) preprint
+
+Ward, E.J. 2017. [bycatch: Using Bayesian generalized linear models for estimating bycatch rates and generating fleet-level expansions.](https://github.com/ericward-noaa/bycatch)
+
+Ver Hoef, Jay M. and Boveng, Peter L., (2007). [Quasi-Poisson vs. negative binomial regression: How should we model overdispersed count data? Ecology, 88(11):2766-2772](http://fisher.utstat.toronto.edu/reid/sta2201s/QUASI-POISSON.pdf)
