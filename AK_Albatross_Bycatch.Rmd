@@ -7,17 +7,22 @@ output:
     toc: true
     toc_depth: 2
     fig_cap: true
+    df_print: paged
   pdf_document: default
   word_document: default
 ---
+The canonical form of this code can be found at:
+
+https://github.com/jjannot-NOAA/alaskastalbycatch
+
 # Set-up
-a LaTeX command that defines \mx to be the equivalent of \mathbf
+<!-- a LaTeX command that defines \mx to be the equivalent of \mathbf -->
 $$\newcommand{\mx}[1]{\mathbf{#1}}$$
 
 ## Load packages 
 ```{r, warning=FALSE, message=FALSE, echo=TRUE}
 # set to final year in data set
-  data.year <- "2018"
+  data.year <- "2020"
 
 # libraries
   library(ggplot2) 
@@ -25,13 +30,15 @@ $$\newcommand{\mx}[1]{\mathbf{#1}}$$
   library(knitr)
   library(tools)
   library(stringr)
-  library(kableExtra)
+  #library(kableExtra)
   library(devtools) # for using e.g., install_github(...)
   library(tidyr)
   library(janitor)
   library(lubridate)
   library(tibble)
   library(purrr)
+  library(readr)
+  library(captioner)
 #installs EW's bycatch package from github if not already installed
   if(!require(bycatch)){
   devtools::install_github("ericward-noaa/bycatch")
@@ -41,22 +48,33 @@ $$\newcommand{\mx}[1]{\mathbf{#1}}$$
 
 qdf <- function(.){data.frame(., stringsAsFactors = FALSE)}
 
+table_nums <- captioner(prefix = "Table")
+
 ```
 ## Set drive & data year, load data
 Change the `data.year` object to the most recent year in the data set. Change the `infiledrive` object to the path where the data are located.
 ```{r, warning=FALSE, message=FALSE, echo=TRUE}
+# USER CHANGES REQUIRED
+#------------------------
+# 1. Ensure data.year is set to final year in data set
+# 2. Change the path to the data so it points to where data is housed
+
 # set to final year in data set
-  data.year <- "2018"
-# path to data
-  infiledrive <- "~/observer/Input/MMSBT/2021/Seabirds/Data/alaskadata/"
+  data.year <- "2020"
+
+# path to data - REPLACE with your own path
+  infiledrive <- paste0("V:/Input/MMSBT/", 
+                        data.year, "/Seabirds/Data/alaskadata/")
 
 # catcher-vessel data
-akcv <- read_csv( file = paste0(infiledrive, "CATCHER_VESSELS_ALBATROSS.csv"))%>%
+akcv <- readr::read_csv( file = paste0(infiledrive,
+                                       "CATCHER_VESSELS_ALBATROSS.csv"))%>%
         clean_names()%>%
         qdf()
 
 # catcher-processor data
-akcp <- read_csv( file = paste0(infiledrive, "CATCHERPROCESSOR_VESSELS_ALBATROSS.csv"))%>%
+akcp <- read_csv( file = paste0(infiledrive,
+                                "CATCHERPROCESSOR_VESSELS_ALBATROSS.csv"))%>%
         clean_names()%>%
         qdf()
 
@@ -84,12 +102,12 @@ We use Bayesian models to estimate mean and variance of total bycatch. These met
 In the simplest case, we can use a simple Poisson process model, where the total number of bycatch events are assumed to follow a Poisson distribution (see model M1 in Martin et al. 2015):</br>
 $$n_{takes,y}\sim Poisson(\lambda_y = \theta * E_y)$$
 where:
-$\begin{aligned}
-\mx{E_{y}} = \text{effort in year } y\\
+
+$\mx{E_{y}} = \text{effort in year } y\\
 \mx{\theta} = \text{estimated bycatch rate}\\
 \mx{\lambda_{y}} = \text{mean expected bycatch in year } y\\
-\mx{n_{takes,y}} = \text{observed number of bycatch (i.e., take) events in year }y\\
-\end{aligned}$
+\mx{n_{takes,y}} = \text{observed number of bycatch (i.e., take) events in year }y\\$
+
 The estimated bycatch rate, \mx{\theta} is assumed to be constant in the base case.  (If desired, a time-varying rate can be applied and tested for validity). A time series of the mean bycatch can be generated for a given species with a given effort metric. However, \mx{\theta * E_{y}} includes uncertainty because \mx{\theta} is estimated.  All uncertainty in the time series arises due to fluctuating effort over time -- percent observer coverage only affects the expansion to unobserved portion of the fleet. We can use Bayesian models (Martin et al. 2015) to estimate mean and 95% CIs of \mx{\theta} and \mx{\theta * E_{y}}.\\
 The simple Poisson base case could be constraining because it assumes that the variance and mean are equal.  The Poisson distribution is a special case of the negative binomial distribution.  To add flexibility to our modeling, we can generalize to use the negative binomial distribution in cases where we might suspect overdispersion such that variance is not equal to the mean.  While the simple Poisson base case above has only a single parameter, \mx{\lambda}, the negative binomial case adds a second paramter, \mx{\kappa} to the model to account for overdispersion (Ver Hoef & Boveng 2007):</br>
 $$n_{takes,y}\sim NegBin2(\lambda_y,\kappa)$$
@@ -241,8 +259,9 @@ df_Poisson = data.frame("time" = d[,"year"],
 
 write.csv(df_Poisson, file = paste0(infiledrive, "BFAL_GOA_CV_estimated_bycatch_Poisson_constant_observed_hooks.csv"), row.names = FALSE)
 
-knitr::kable(df_Poisson,
-      caption  = paste0("Fleet-wide bycatch estimates of black-footed albatross in the catcher vessel fleet fishing in the Gulf of Alaska for ", min(d$year), "-", data.year, ". Estimates are from a Poisson distribution, assuming a constant bycatch rate, with effort measured as the observed number of hooks, and the expansion based on the proportion of observed landings."))
+df_Poisson
+table_nums(name = "dfPoisson", caption = paste0("Fleet-wide bycatch estimates of black-footed albatross in the catcher vessel fleet fishing in the Gulf of Alaska for ", min(d$year), "-", data.year, ". Estimates are from a Poisson distribution, assuming a constant bycatch rate, with effort measured as the observed number of hooks, and the expansion based on the proportion of observed landings."), display = "full")
+
 
 ```
 
@@ -266,11 +285,13 @@ mean(phi_poisson)
 
 When expanding to fleet-wide estimates from the negative binomial distribution, a warning was issued to increase the `maxX` value to 490000. 
 
-```{r negbinconst, fig.pos="placeHere", fig.cap = "Figure 4. Estimated fleet-wide bycatch (observed & unobserved vessels) of black-footed albatross caught by catcher vessels in the Gulf of Alaska. Both the  Poisson and the negative binomial distribution incorporate data on takes, effort as the number of observed hooks, and observer coverage as a percentage of observed landings. Bycatch rate is assumed to be constant.  Dots represent observed bycatch events.", echo = 1}
+```{r expnegbinconst}
 
 expanded_nb = bycatch::expand(fit_nb, coverage = d$percent_obs_landing,
                      control = list(sigfig_multiplier = 100, mcmc_samples = 1000, maxX = 490000))
+```
 
+```{r, dfnegbinconst, results = 'asis', echo = FALSE}
 df_negbinom = data.frame("time" = d[,"year"], 
               "mean" = apply(expanded_nb, 2, mean),
               "median" = apply(expanded_nb, 2, quantile, 0.5),
@@ -284,12 +305,15 @@ df_negbinom = data.frame("time" = d[,"year"],
 write.csv(df_negbinom, paste0(infiledrive,                        "BFAL_GOA_CV_estimated_bycatch_negbinom_constant_observed_hooks.csv"),
           row.names = FALSE)
 
-knitr::kable(df_negbinom,
-      caption  = paste0("Fleet-wide bycatch estimates (observed & unobserved vessels) of black-footed albatross in the catcher vessel fleet fishing in the Gulf of Alaska for ", min(d$year), "-", data.year, ". Estimates are from a negative binomial distribution, assuming a constant bycatch rate, with effort measured as the observed number of hooks, and the expansion based on the proportion of observed landings."))
+df_negbinom
+table_nums(name = "dfnegbinom", caption  = paste0("Fleet-wide bycatch estimates (observed & unobserved vessels) of black-footed albatross in the catcher vessel fleet fishing in the Gulf of Alaska for ", min(d$year), "-", data.year, ". Estimates are from a negative binomial distribution, assuming a constant bycatch rate, with effort measured as the observed number of hooks, and the expansion based on the proportion of observed landings."), display = "full")
+```
+
+```{r negbinconst, fig.pos="placeHere", fig.cap = "Figure 4. Estimated fleet-wide bycatch (observed & unobserved vessels) of black-footed albatross caught by catcher vessels in the Gulf of Alaska. Both the  Poisson and the negative binomial distribution incorporate data on takes, effort as the number of observed hooks, and observer coverage as a percentage of observed landings. Bycatch rate is assumed to be constant.  Dots represent observed bycatch events.", echo = 1}
 
 df <- rbind(df_Poisson, df_negbinom)
 
-ggplot(df, aes(df$time, mean)) +
+ggplot(df, aes(time, mean)) +
         geom_ribbon(aes(ymin = lower95, ymax = upper95, fill = model),
                     alpha = 0.3) + 
         geom_line(aes(color = model)) +
